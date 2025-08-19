@@ -43,7 +43,7 @@ This project demonstrates a **production-ready fraud detection system** that com
 ---
 
 ## 🏗️ **Architecture**
-[![Over](https://res.cloudinary.com/dptjhpkmv/image/upload/v1755590296/FSDS-2-Project.drawio_egw3fd.svg)]
+[![Over](https://res.cloudinary.com/dptjhpkmv/image/upload/v1755590563/FSDS-2-Project.drawio_1_cwvmi4.png)]
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           FRAUD DETECTION PIPELINE                          │
