@@ -1,0 +1,35 @@
+services:
+  trino-coordinator:
+    image: trinodb/trino:latest
+    hostname: trino-coordinator
+    ports:
+      - "8090:8080"
+    environment:
+      TRINO_ENVIRONMENT: production
+    volumes:
+      - ./trino/etc:/etc/trino:ro
+    networks:
+      - fraud-detection-project_fraud-detection-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/v1/info || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  trino-worker-1:
+    image: trinodb/trino:latest
+    hostname: trino-worker-1
+    environment:
+      TRINO_ENVIRONMENT: production
+    volumes:
+      - ./trino/etc-worker:/etc/trino:ro
+    networks:
+      - fraud-detection-project_fraud-detection-network
+    depends_on:
+      - trino-coordinator
+
+networks:
+  fraud-detection-project_fraud-detection-network:
+    external: true
+

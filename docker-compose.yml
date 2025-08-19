@@ -1,0 +1,234 @@
+version: '3.8'
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./minio_data:/data
+    networks:
+      - fraud-detection-network
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: cdc-zookeeper
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: echo srvr | nc zookeeper 2181 || exit 1
+      start_period: 10s
+      retries: 20
+      interval: 10s
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - fraud-detection-network
+
+  broker:
+    image: confluentinc/cp-server:7.5.0
+    container_name: cdc-broker
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    healthcheck:
+      test: nc -z localhost 9092 || exit -1
+      start_period: 15s
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    networks:
+      - fraud-detection-network
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: cdc-schema-registry
+    depends_on:
+      broker:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    healthcheck:
+      start_period: 10s
+      interval: 10s
+      retries: 20
+      test: curl --user superUser:superUser --fail --silent --insecure http://localhost:8081/subjects --output /dev/null || exit 1
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker:29092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    networks:
+      - fraud-detection-network
+
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.5.0
+    container_name: cdc-control-center
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      debezium:
+        condition: service_healthy
+    ports:
+      - "9021:9021"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9021/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'broker:29092'
+      CONTROL_CENTER_CONNECT_CONNECT-DEFAULT_CLUSTER: 'debezium:8083'
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_CONNECT_HEALTHCHECK_ENDPOINT: '/connectors'
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+    networks:
+      - fraud-detection-network
+
+    # --- Cấu hình lại FLINK ---
+# Cấu hình đầy đủ và đúng cho jobmanager
+  jobmanager:
+        build:
+          context: ./data_ingestion/kafka_producer/
+          dockerfile: Dockerfile
+        image: flink-fraud-detection-img
+        container_name: flink-jobmanager
+        ports:
+          - "8088:8081"
+        command: jobmanager
+        environment:
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          FLINK_PROPERTIES: |
+            jobmanager.rpc.address: jobmanager
+            fs.s3a.endpoint: http://minio:9000
+            fs.s3a.access.key: minioadmin
+            fs.s3a.secret.key: minioadmin
+            fs.s3a.path.style.access: true
+        volumes:
+            - ./data_ingestion/kafka_producer/pyflink_jobs:/opt/flink/pyflink_jobs
+        networks:
+            - fraud-detection-network
+
+# Cấu hình đầy đủ và đúng cho taskmanager
+  taskmanager:
+        image: flink-fraud-detection-img
+        container_name: flink-taskmanager
+        depends_on:
+          - jobmanager
+        command: taskmanager
+        environment:
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          FLINK_PROPERTIES: |
+            jobmanager.rpc.address: jobmanager
+            taskmanager.numberOfTaskSlots: 4
+            fs.s3a.endpoint: http://minio:9000
+            fs.s3a.access.key: minioadmin
+            fs.s3a.secret.key: minioadmin
+            fs.s3a.path.style.access: true
+        volumes:
+          - ./data_ingestion/kafka_producer/pyflink_jobs:/opt/flink/pyflink_jobs
+        networks:
+          - fraud-detection-network
+  debezium:
+    image: debezium/connect:1.9
+    container_name: cdc-debezium
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      zookeeper:
+        condition: service_healthy
+      postgresql:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'curl',
+          '--silent',
+          '--fail',
+          '-X',
+          'GET',
+          'http://localhost:8083/connectors',
+        ]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: broker:29092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_status
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_TOPIC_CREATION_ENABLE: true
+    networks:
+      - fraud-detection-network
+
+  debezium-ui:
+    image: debezium/debezium-ui:latest
+    container_name: debezium-ui
+    hostname: debezium-ui
+    depends_on:
+      debezium:
+        condition: service_healthy
+    ports:
+      - '8082:8080'
+    environment:
+      KAFKA_CONNECT_URIS: http://debezium:8083
+    networks:
+      - fraud-detection-network
+
+  postgresql:
+    image: postgres:14
+    command: ['postgres', '-c', 'wal_level=logical']
+    container_name: cdc-postgresql
+    healthcheck:
+      test: ['CMD', 'psql', '-U', 'postgres', '-d', 'fraud_detection', '-c', 'SELECT 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5434:5432"
+    environment:
+      - POSTGRES_DB=fraud_detection
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes: 
+      - cdc_postgres_data:/var/lib/postgresql/data
+    networks:
+      - fraud-detection-network
+volumes:
+  cdc_postgres_data:
+networks:
+  fraud-detection-network:
+    driver: bridge

@@ -1,0 +1,29 @@
+{
+  "name": "postgres-fraud-cdc-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    "database.hostname": "cdc-postgresql",
+    "database.port": "5432",
+    "database.user": "postgres",
+    "database.password": "postgres",
+    "database.dbname": "fraud_detection",
+    "database.server.name": "fraud_db",
+    "table.include.list": "public.fraud_transactions,public.fraud_alerts",
+    "plugin.name": "pgoutput",
+    "slot.name": "fraud_detection_slot",
+    "publication.name": "fraud_detection_publication",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false",
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "table,lsn,source.ts_ms",
+    "topic.prefix": "fraud_db",
+    "heartbeat.interval.ms": "10000",
+    "decimal.handling.mode": "double"
+  }
+}

@@ -1,0 +1,38 @@
+# Environment & IDE
+.env
+*.env
+*.code-workspace
+.vscode/
+.idea/
+.DS_Store
+__pycache__/
+*.pyc
+
+# Airflow runtime
+airflow/logs/
+airflow/dag_processor_manager/
+airflow/scheduler/
+
+# Object store & stateful data
+minio_data/
+kafka_data/
+zookeeper_data/
+trino/logs/
+trino/data/
+
+# Raw/large datasets (keep small samples only)
+raw-data/**
+!raw-data/README.md
+
+# Local jars/binaries (prefer managed deps)
+jars/**
+data_ingestion/kafka_connect/jars/**
+
+# Temp files
+*.tmp
+*.swp
+
+# Trino temp
+trino/etc/catalog/*.tmp
+
+
